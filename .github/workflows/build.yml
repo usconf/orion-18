@@ -1,37 +1,107 @@
-name: Build Orion Runtime
+name: Build Orion Runtime Rootless
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - master
+      - main
+
+permissions:
+  contents: read
 
 jobs:
   build:
+    name: Build Orion for iOS 14-18
     runs-on: macos-15
 
     steps:
-      - name: Checkout
+      # 1. Download repository
+      - name: Checkout Orion
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
+      # 2. Install dependencies
       - name: Install dependencies
         run: |
           brew install ldid xz
 
+      # 3. Install Theos
       - name: Install Theos
         run: |
           export THEOS="$HOME/theos"
           bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
 
-      - name: Build Orion
+      # 4. Check environment
+      - name: Check build environment
         run: |
           export THEOS="$HOME/theos"
-          make clean package \
+
+          echo "===== XCODE ====="
+          xcodebuild -version
+
+          echo "===== SWIFT ====="
+          swift --version
+
+          echo "===== THEOS ====="
+          ls -la "$THEOS"
+
+          echo "===== PROJECT ====="
+          ls -la
+
+          echo "===== MAKEFILE ====="
+          grep -n "SUBPKG_1" Makefile || true
+
+      # 5. Build Orion
+      - name: Build Orion
+        shell: bash
+        run: |
+          export THEOS="$HOME/theos"
+
+          set -o pipefail
+
+          echo "===== CLEAN ====="
+          make clean 2>&1 | tee clean.log
+
+          echo "===== BUILD ====="
+          make package \
             THEOS_PACKAGE_SCHEME=rootless \
             SUBPKG=1 \
-            FINALPACKAGE=1
+            FINALPACKAGE=1 \
+            2>&1 | tee build.log
 
-      - name: Upload DEB
+      # 6. Inspect generated packages
+      - name: Inspect DEB packages
+        if: always()
+        run: |
+          echo "===== PACKAGE SEARCH ====="
+          find . -type f -name "*.deb" -print
+
+          echo "===== PACKAGE CONTENTS ====="
+          for f in $(find . -type f -name "*.deb"); do
+            echo "PACKAGE: $f"
+            dpkg-deb -I "$f" || true
+          done
+
+      # 7. Upload DEB
+      - name: Upload Orion DEB
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: Orion-Rootless
+          name: Orion-Rootless-DEB
           path: packages/*.deb
+          if-no-files-found: warn
+          retention-days: 14
+
+      # 8. Upload logs even after failure
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Orion-Build-Logs
+          path: |
+            build.log
+            clean.log
+          if-no-files-found: warn
+          retention-days: 14
